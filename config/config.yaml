@@ -1,0 +1,413 @@
+# =============================================================================
+# Rapid Response - 5G & Yapay Zeka ile Akilli Yol Guvenligi
+# TUM AYARLARIN TEK KAYNAGI (single source of truth).
+# Kodda hicbir parametre hardcode EDILMEZ; her sey buradan okunur.
+# =============================================================================
+
+project:
+  name: "rapid_response"
+  video_id_default: "video.mp4"   # girdi adi okunamazsa kullanilacak ad
+
+# -----------------------------------------------------------------------------
+# Yollar. Ornek main.py /app/weights/best_model.pt okur; VM tablosu /app/models/
+# der. Celiskiyi tek yerden yonetiyoruz: detector icin aday yollar sirayla
+# denenir, ilk var olan kullanilir. (Dockerfile /app/models -> /app/weights
+# symlink'i de birakir.)
+# -----------------------------------------------------------------------------
+paths:
+  input_video: "/app/data/input/video.mp4"
+  output_json: "/app/data/output/results.json"
+  weights_dir: "/app/weights"
+  # Detektor agirligi icin oncelik sirali aday yollar:
+  detector_weights_candidates:
+    - "/app/weights/best_model.pt"
+    - "/app/models/best_model.pt"
+  # OCR (EasyOCR) onceden indirilmis model klasoru (offline):
+  ocr_model_dir: "/app/weights/ocr"
+  # MediaPipe Face Landmarker .task dosyasi (offline gomulu):
+  face_landmarker_task: "/app/weights/face_landmarker.task"
+  # El-kulak jesti (telefonla_konusma) icin MediaPipe Hand Landmarker:
+  hand_landmarker_task: "/app/weights/hand_landmarker.task"
+  # Hafif renk siniflandirma CNN'i (offline gomulu; yoksa HSV'ye dusulur):
+  color_cnn_weights: "/app/weights/color_cnn.pt"
+  # Hafif govde-tipi siniflandirma CNN'i (offline gomulu; yoksa detektor tip'i):
+  tip_cnn_weights: "/app/weights/tip_cnn.pt"
+  # Yorgunluk/esneme yedek CNN'i (offline gomulu; MediaPipe basarisiz olunca):
+  drowsiness_cnn_weights: "/app/weights/drowsiness_cnn.pt"
+
+# -----------------------------------------------------------------------------
+# Calisma ortami / cihaz. Anti-hile: ortam tespiti YOK. Tek tip davranis.
+# T4 yoksa CPU'ya dusulur ama hedef cuda + FP16.
+# -----------------------------------------------------------------------------
+runtime:
+  device: "auto"          # auto | cuda | cpu  (auto: cuda varsa cuda)
+  half_precision: true    # T4'te FP16
+  # Tum kutuphanelerin calisma aninda indirme yapmasini engelle (offline):
+  offline_env:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    YOLO_OFFLINE: "1"
+    ULTRALYTICS_OFFLINE: "1"
+
+# -----------------------------------------------------------------------------
+# Performans butcesi (T4 / 10 dk). Kare ornekleme + batch + adaptif guard.
+# -----------------------------------------------------------------------------
+performance:
+  analiz_fps: 6           # saniyede analiz edilecek kare sayisi (kaynak fps'ten ornekle)
+  batch_size: 8           # YOLO batch cikarim
+  imgsz: 1280             # YOLO giris boyutu — komite videolari 4K (3840x2160);
+                          # 640'a kucultunce plaka/teknocan gibi kucuk nesneler
+                          # KAYBOLUYOR. Test: 640->hicbir sey, 1920->plaka@0.81.
+                          # T4'te ~100-200ms/kare; analiz_fps ile 10dk butce korunur.
+                          # Dusuk cozunurluklu video icin 1280'e dusurulebilir.
+  max_runtime_seconds: 540   # 10 dk = 600 sn; 60 sn emniyet payi
+  adaptive_sampling: true    # butce asilirsa analiz_fps'i kademeli dusur
+  adaptive_min_fps: 2        # adaptif dususte alt sinir
+  log_per_frame_timing: true # her karenin hangi adimlari + toplam ms loglansin
+
+# -----------------------------------------------------------------------------
+# Nesne takibi (BoTSORT). Kalici track ID -> dogru slalom yorungesi + coklu
+# arac gecisinde arac_bilgisi karismasini onler.
+# DIKKAT: takip STATEFUL/ardisiktir -> batch cikarimi devre disi birakir
+# (kareler tek tek islenir). Trade-off: biraz daha yavas ama dogru ID.
+# -----------------------------------------------------------------------------
+tracking:
+  enabled: true
+  tracker: "botsort.yaml"    # botsort.yaml | bytetrack.yaml (ultralytics gomulu)
+  max_stale_seconds: 2.0     # bu sure gorunmeyen track temizlenir (slalom buffer)
+
+# -----------------------------------------------------------------------------
+# Hiz tahmini (live/ + olcum). FTR results.json'a GIRMEZ (FTR semasinda hiz
+# alani yok; FTR > Sartname onceligi). Sartname §5: GERCEK HIZ, final YZ
+# puaninin (%40) parcasi; komite GT hizi verir.
+# Yontem (IPM/homografi): goruntu pikseli -> yer duzlemi (metre). BoTSORT
+# track'inin yer-temas noktasi yansitilir, dunya konumu zaman uzerinde
+# regresyonla hiza cevrilir (km/h).
+# -----------------------------------------------------------------------------
+speed:
+  enabled: true
+  # Homografi 3x3 (9 float, satir-major). null ise image_points + world_points'tan
+  # turetilir (training/calibrate_speed.py uretir).
+  homography: null
+  image_points: []           # [[u,v], ...] >=4 (kalibrasyon doldurur)
+  world_points: []           # [[X,Y], ...] METRE, image_points ile AYNI sira
+  contact_point: "bottom_center"   # arac yer-temas noktasi (teker hizasi)
+  window_seconds: 1.0        # hiz penceresi
+  min_time_span: 0.3         # bu surenin altinda hiz hesaplama (gurultu)
+  min_displacement_m: 0.2    # bu altinda hareketsiz say (0 km/h)
+  max_speed_kmh: 250         # mantik disi degerleri ele (None dondur)
+  smoothing: "regression"    # regression (en kararli) | endpoints | median
+
+# -----------------------------------------------------------------------------
+# On isleme (preprocessing). CLAHE her karede; DCP kosullu.
+# -----------------------------------------------------------------------------
+preprocessing:
+  clahe:
+    enabled: false   # detektor ham karelerle egitildi; cikarim preproc tespiti BOZUYOR (teknocan 68->0)
+    clip_limit: 2.5         # OTR ile uyumlu
+    tile_grid_size: [8, 8]
+    color_space: "lab"      # lab | yuv  (L/Y kanalina uygula)
+  fog:
+    # Dark-channel tabanli ucuz sis-yogunlugu skoru [0..1].
+    dark_channel_patch: 15
+    score_downscale: 0.25   # skoru kucuk kopyada hesapla (ucuz)
+  dcp:
+    # Mod: adaptive (FTR) | qod_gated (canli) | always | off
+    mode: "off"
+    fog_score_threshold: 0.45   # skor bu esigi asarsa DCP devreye girer
+    omega: 0.95
+    t0: 0.1
+    patch_size: 15
+    guided_radius: 40
+    guided_eps: 0.001
+    # Histerezis: kare kare acilip kapanmasin
+    hysteresis_on_frames: 3     # N kare ust uste esik asilirsa AC
+    hysteresis_off_frames: 5    # M kare altina inince KAPAT
+
+# -----------------------------------------------------------------------------
+# Tespit katmani. data.yaml'daki egitim sinif adlari -> sema eslemesi.
+# Model class isimleri (model.names) bu anahtarlarla birebir olmali.
+# -----------------------------------------------------------------------------
+detection:
+  conf_threshold: 0.35
+  iou_threshold: 0.6
+  max_det: 100
+
+  # MIMARI: arac TIPI artik YOLO sinifi degil -> YOLO generic 'arac' tespit eder,
+  # tip'i src/detection/tip_cnn.py (crop->tip) tasir. Buradaki anahtarlar
+  # vehicle_detections'in "arac sayidigi" YOLO sinif adlari; deger "" -> detektor
+  # tip oyu vermez (tip_cnn tasir). Eski 7-tip korunur (geriye donuk; data.yaml
+  # generic olunca onlar eslesmez, zararsiz).
+  vehicle_types:
+    arac: ""
+    sedan: "sedan"
+    suv: "suv"
+    hatchback: "hatchback"
+    pickup: "pickup"
+    minibus: "minibus"
+    panelvan: "panelvan"
+    kamyon: "kamyon"
+
+  # Plaka bolgesi class adi (sonra OCR'a gider)
+  plate_class: "plaka"
+
+  # nesneler kategorisi (Tablo 2: nesneler)
+  object_classes:
+    teknocan: "teknocan"
+    bilgisayar: "bilgisayar"
+
+  # sofor_eylemi mantigina giren YARDIMCI nesne class'lari (sema'ya dogrudan
+  # yazilmaz; yuz/poz yakinligi ile birlesip eyleme donusur)
+  action_object_classes:
+    telefon: "telefon"     # -> telefonla_konusma
+    sigara: "sigara"       # -> sigara_icme
+    sise: "sise"           # sise/bardak -> su_icme
+
+  # Emniyet kemeri. Modelde kemer "var" ve/veya "yok" class'i olabilir.
+  seatbelt:
+    present_classes: ["emniyet_kemeri"]      # kemer TAKILI tespiti
+    absent_classes: []                       # (opsiyonel) kemer TAKILMAMIS class'i
+    # VIDEO-SEVIYE karar (kare-bazli false positive'i onler):
+    present_fraction_no_violation: 0.10      # kemer karelerin >=%10'unda goruldu -> ihlal YOK
+    absent_fraction_violation: 0.20          # "takilmamis" sinifi >=%20 -> ihlal (net)
+    min_driver_frames: 3
+    # Surucu govdesinde present yoksa -> emniyet_kemeri_ihlali uretilir.
+
+  # Kisi (yolcu + surucu koltuk eslemesi icin)
+  person_class: "kisi"
+
+# -----------------------------------------------------------------------------
+# Arac govde tipi siniflandirma (Tablo 1: tip). Crop->tip CNN, offline.
+# auto: tip_cnn.pt varsa CNN, yoksa detektor sinif adina (vehicle_types) dusulur.
+# -----------------------------------------------------------------------------
+tip:
+  method: "auto"          # auto | cnn | detector
+  cnn_input_size: 128     # tip silueti detay ister (128: govde sekli daha net)
+  cnn_min_confidence: 0.5 # CNN bu altinda kalirsa detektor tip'ine dus
+
+# -----------------------------------------------------------------------------
+# Arac rengi siniflandirma (Tablo 1: renk). HSV merkez tabanli, offline.
+# -----------------------------------------------------------------------------
+color:
+  # auto: color_cnn.pt varsa CNN, yoksa HSV'ye dus (offline guvenli varsayilan)
+  # cnn: yalnizca CNN (yoksa renk bos) | hsv_centroid: yalnizca HSV (agirliksiz)
+  method: "auto"
+  cnn_input_size: 64
+  cnn_min_confidence: 0.5  # CNN bu altinda kalirsa HSV'ye dus
+  crop_top_ratio: 0.55     # govde renginde cam/teker degil ust govdeyi orneklemek icin
+  min_saturation_gray: 40  # bu altinda akromatik (beyaz/gri/siyah) kabul
+  value_black_max: 60      # V bu altinda -> siyah
+  value_white_min: 190     # V bu ustu + dusuk S -> beyaz
+  # Renkli tonlar icin Hue (OpenCV 0..179) araliklari:
+  hue_ranges:
+    kirmizi: [[0, 10], [170, 179]]
+    turuncu: [[11, 22]]
+    sari: [[23, 33]]
+    yesil: [[34, 85]]
+    mavi: [[86, 130]]
+    # kahverengi: dusuk-orta V'li kirmizi/turuncu tonu (asagida ozel kural)
+  kahverengi_value_max: 150   # turuncu/kirmizi hue + V<bu -> kahverengi
+
+# -----------------------------------------------------------------------------
+# Plaka OCR (AYRI asama). Kirp -> OCR -> normalize -> resmi regex dogrula.
+# -----------------------------------------------------------------------------
+plate_ocr:
+  enabled: true            # canli "hafif yol" / ablasyon icin kapatilabilir
+  engine: "fast_plate_ocr" # fast_plate_ocr (TR/global plaka ozel, EasyOCR'dan iyi) | easyocr
+  fast_model: "cct-xs-v1-global-model"   # fast-plate-ocr ONNX modeli
+  languages: ["en"]        # TR plakalari latin harf+rakam; en yeterli
+  min_confidence: 0.30     # bu altindaki OCR sonuclari bos gecilir
+  upscale_min_height: 48   # plaka kirpintisi bu yukseklige cikarilir
+  # Resmi regex (FTR dokumanindan BIREBIR; dokumandaki 'a-zAZ' OCR artefakti
+  # 'a-zA-Z' olarak duzeltilmistir).
+  regex: '^(0[1-9]|[1-7][0-9]|8[01])((\s?[a-zA-Z]\s?)(\d{4,5})|(\s?[a-zA-Z]{2}\s?)(\d{3,4})|(\s?[a-zA-Z]{3}\s?)(\d{2,3}))$'
+
+# -----------------------------------------------------------------------------
+# Dilimli cikarim - SAHI (opsiyonel, kucuk nesneler). Bolgesel + secici.
+# -----------------------------------------------------------------------------
+# El-kulak jesti -> telefonla_konusma (telefon nesnesi cok kucuk; el gorunur)
+hand_phone:
+  enabled: true
+  min_frames: 2              # bu kadar ardisik karede kafa-hizasi el -> olay
+  head_region_y_max: 0.7     # el crop-y bu degerin ustunde = kafa hizasi
+  min_detection_confidence: 0.3
+  confidence: 0.7
+
+sahi:
+  enabled: true
+  mode: "region"           # region | full | off  (FTR'de region onerilir)
+  trigger: "always"  # always | small_object | plate_unreadable | qod_active
+  small_object_area_ratio: 0.01   # bbox/frame alan orani < bu -> kucuk nesne
+  slice_size: 256
+  overlap_ratio: 0.2
+  conf_threshold: 0.3
+  # Butce korumasi (FTR 10 dk): SAHI'yi seyrek tetikle.
+  region_min_interval_seconds: 0.5   # ayni plaka icin en sik bu araliklarla dene
+  region_max_attempts: 60            # toplam SAHI deneme ust siniri
+
+# -----------------------------------------------------------------------------
+# MediaPipe Face Landmarker (surucu yuzu). .task gomulu, lokal yuklenir.
+# -----------------------------------------------------------------------------
+face:
+  enabled: true
+  # Surucu yuzu nasil secilir: kabin/arac ROI icindeki yuz adaylarindan.
+  driver_selection: "largest"   # largest | leftmost | rightmost
+  min_face_size_px: 24
+  # Bas yaw (yana/arkaya donus) - facial transformation matrix'ten derece.
+  arkaya_bakma_yaw_deg: 45      # |yaw| bu derecenin ustunde -> arkaya bakma adayi
+  arkaya_bakma_min_frames: 4    # bu kadar kare surekli -> olay
+  # Etrafa bakinma: yaw salinim (tekrarlayan saga-sola)
+  etrafa_bakinma_yaw_std_deg: 18
+  etrafa_bakinma_window: 30     # kare penceresi
+  etrafa_bakinma_min_crossings: 3  # pencerede yon degisimi sayisi
+  # Esneme: jawOpen blendshape (0..1) suregelen
+  esneme_jaw_open: 0.45
+  esneme_min_frames: 5
+  # (Bonus) yorgunluk: goz kapanma orani
+  drowsiness:
+    enabled: false
+    eye_blink_threshold: 0.5
+    min_frames: 8
+  # Yedek CNN (Gelistirme sari-1): yol kenari/uzak/acili/cam ardi yuzde MediaPipe
+  # basarisiz olunca esneme/yorgunlugu crop'tan dogrudan kestiren offline CNN.
+  fallback_cnn:
+    enabled: true
+    input_size: 96
+    min_confidence: 0.5
+    use_when: "mediapipe_failed"   # mediapipe_failed | always
+
+# -----------------------------------------------------------------------------
+# Birlesik eylemler: nesne + yuz/poz yakinligi.
+# Yakinlik, ilgili nesne kutusu ile yuz/agiz/el bolgesi arasindaki
+# normalize mesafe (kutu kosegenine gore) ile olculur.
+# -----------------------------------------------------------------------------
+actions:
+  telefonla_konusma:
+    proximity_ratio: 0.6     # telefon-kafa mesafesi / kafa kosegeni < bu -> aday
+    min_frames: 3
+  sigara_icme:
+    proximity_ratio: 0.5     # sigara-agiz
+    min_frames: 3
+  su_icme:
+    proximity_ratio: 0.5     # sise/bardak-agiz
+    min_frames: 3
+
+# -----------------------------------------------------------------------------
+# Yolcu koltuk eslemesi. Arac/kabin ROI icinde kisi kutusunun konumuna gore.
+# x: sol/sag, y: on/arka. (Esikler ROI'ye gore normalize 0..1.)
+# -----------------------------------------------------------------------------
+passengers:
+  enabled: true
+  front_y_max: 0.55         # ROI ust kismi -> on (y < bu on koltuk bolgesi)
+  # Arka koltuk sol/sag ayrimi (x ekseni, ROI icinde normalize):
+  back_left_x_max: 0.5      # x < bu -> arka_koltuk_1 (sol), degilse arka_koltuk_2
+  min_person_area_ratio: 0.005
+  min_frames: 3
+
+# -----------------------------------------------------------------------------
+# Zamansal mantik (temporal.py): slalom + olay debounce + zaman damgalama.
+# -----------------------------------------------------------------------------
+temporal:
+  # Slalom: ana arac bbox merkez-x'inin pencere uzerindeki yanal salinimi.
+  slalom:
+    window_seconds: 3.0
+    min_lane_crossings: 3       # pencerede yon degisimi (zero-crossing) sayisi
+    lateral_amplitude_ratio: 0.04  # salinim genligi / frame genisligi esigi
+    min_confidence: 0.5
+  # Olay debounce: ayni (kategori, etiket) icin bu sure icindeki tespitleri
+  # tek olaya indir.
+  debounce_gap_seconds: 1.5
+  # Bir olayin gecerli sayilmasi icin minimum tekrar (gurultu bastirma):
+  min_event_frames: 2
+  # Olay zaman damgasi: "first" | "peak" (en yuksek conf'lu kare)
+  timestamp_policy: "peak"
+
+# -----------------------------------------------------------------------------
+# Arac bilgisi konsolidasyonu (tek ana arac). Kareler arasi oylama.
+# -----------------------------------------------------------------------------
+vehicle_summary:
+  type_vote: "weighted"     # weighted (conf agirlikli mod) | mode
+  color_vote: "weighted"
+  # arac_bilgisi.confidence_score: tip/plaka/renk bilesenlerinin agirlikli birlesimi
+  weights:
+    tip: 0.4
+    plaka: 0.35
+    renk: 0.25
+  plate_absent_value: ""    # plaka okunamadiysa (regex disi) bos string
+
+# -----------------------------------------------------------------------------
+# Cikti dogrulama (schema.py): yazmadan once izinli etiket/anahtar kontrolu.
+# -----------------------------------------------------------------------------
+output:
+  ensure_ascii: false
+  indent: 2
+  drop_invalid_labels: true   # izinli olmayan etiket -> ya at ya duzelt
+  round_confidence: 4
+  round_time: 2
+
+# -----------------------------------------------------------------------------
+# Degerlendirme (training/evaluate.py - image'a GIRMEZ). Metrik harness'i.
+# -----------------------------------------------------------------------------
+evaluate:
+  event_time_tolerance_seconds: 1.0  # tahmin-GT olay eslesme zaman toleransi
+  plate_exact_match: true            # plaka tam eslesme + karakter dogrulugu (CER)
+  # QoD acik/kapali profilleri (ablasyon icin): kapali=hafif yol, acik=agir yol
+  qod_off_profile:
+    preprocessing: {dcp: {mode: "off"}}
+    sahi: {enabled: false}
+    plate_ocr: {enabled: false}
+  qod_on_profile:
+    preprocessing: {dcp: {mode: "adaptive"}}
+    sahi: {enabled: true}
+    plate_ocr: {enabled: true}
+
+# -----------------------------------------------------------------------------
+# 5G / Open Gateway kimlik dogrulama (CAMARA OAuth2 / CIBA) — image'a GIRMEZ.
+# GIZLI kimlik bilgileri config'e YAZILMAZ; yalnizca ENV'den okunur:
+#   CAMARA_CLIENT_ID, CAMARA_CLIENT_SECRET   (sandbox: KOMITEDEN gelir)
+# Statik token ile test/bypass (auth akisini atlar): NV_ACCESS_TOKEN / QOD_ACCESS_TOKEN
+# Endpoint/scope onceligi: env > buradaki deger > {auth_base}/... varsayilan.
+# -----------------------------------------------------------------------------
+auth:
+  auth_base: "https://opengateway.turkcell.com.tr"  # bos url'ler bundan turetilir
+  bc_authorize_url: ""        # bos -> {auth_base}/bc-authorize (CIBA baslatma)
+  token_url: ""               # bos -> {auth_base}/token        (token + CIBA poll)
+  poll_interval_seconds: 5    # CIBA poll araligi (bc-authorize "interval" gecerse o)
+  poll_timeout_seconds: 30    # CIBA toplam bekleme ust siniri
+  token_leeway_seconds: 30    # token bu kadar erken yenilenir (onbellek)
+  nv_scope: "number-verification:verify"  # NV CIBA scope (komite kesin degeri verir)
+  qod_scope: "qod"                        # QoD scope (komite kesin degeri verir)
+
+# -----------------------------------------------------------------------------
+# Egitim (training/ - image'a GIRMEZ; sadece fine-tune icin okunur).
+# Ultralytics transfer learning parametreleri.
+# -----------------------------------------------------------------------------
+training:
+  pretrained: "yolo11s.pt"    # tek aile YOLO11 (yolo11n.pt hafif alternatif)
+  data_yaml: "training/data.yaml"
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  lr0: 0.01
+  lrf: 0.01
+  patience: 25
+  optimizer: "auto"
+  device: 0                   # 0 = ilk GPU; "cpu" da olabilir
+  project: "runs"
+  name: "rapid_response_yolo11s"
+  # Ultralytics dahili augmentasyon (training/augment.py'deki SENTETIK uretimle
+  # birlikte kullanilir; ablasyon icin sentetik seti ON/OFF edilebilir):
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 5.0
+  translate: 0.1
+  scale: 0.5
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.1
+  # En iyi agirligin kopyalanacagi hedef (cikarimda kullanilan yol):
+  export_best_to: "weights/best_model.pt"
+  # Opsiyonel hizlandirma (gomulu, offline):
+  export_format: ""           # "" | "engine" (TensorRT) | "onnx"
+  export_int8: false

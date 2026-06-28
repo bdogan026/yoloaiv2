@@ -1,0 +1,96 @@
+# =============================================================================
+# prepare_dataset.py kaynak tanimlari.  Kopyala -> training/sources.yaml yap,
+# yollari KENDI indirdigin datasetlere gore doldur.
+#
+# Hedef 15 sinif (data.yaml): sedan suv hatchback pickup minibus panelvan kamyon
+#   plaka teknocan bilgisayar telefon sigara sise emniyet_kemeri kisi
+#
+# `map`: kaynaktaki sinif ADI  ->  hedef sinif ADI.  Listede olmayan kaynak
+#         siniflari otomatik ATILIR.  Isimle eslersin (id ezberlemezsin).
+# `names` (yolo icin): kaynagin data.yaml 'names' sirasi (id0, id1, ...).
+# `val_only: true`: kaynak tamamen VAL'e gider (komite videolari icin).
+# =============================================================================
+
+# --- Plaka (Roboflow TR plaka, YOLO export) ----------------------------------
+- name: roboflow_tr_plate
+  format: yolo
+  images: ../datasets/_raw/tr_plates/train/images
+  names: [License_Plate]          # kaynagin data.yaml 'names' sirasi
+  map:
+    License_Plate: plaka
+
+# --- Surucu davranisi nesneleri (Roboflow Abnormal Driver Behaviour) ---------
+- name: abnormal_driver_behaviour
+  format: yolo
+  images: ../datasets/_raw/abnormal_behaviour/train/images
+  names: [Phone, Cigarette, Drinking, Seatbelt, Eating]   # kaynak sirasina GORE duzelt!
+  map:
+    Phone: telefon
+    Cigarette: sigara
+    Drinking: sise                # icme nesnesi (sise/bardak) -> su_icme uretir
+    Seatbelt: emniyet_kemeri      # DIKKAT polarite: kaynak "takili" demekse cikarim cevirir
+    # Eating: (eslenmedi -> atilir)
+
+# --- Bilgisayar/telefon/sise (COCO subset, instances json) -------------------
+- name: coco_objects
+  format: coco
+  images: ../datasets/_raw/coco/val2017
+  ann: ../datasets/_raw/coco/annotations/instances_val2017.json
+  map:
+    laptop: bilgisayar
+    cell phone: telefon
+    bottle: sise
+    cup: sise
+    person: kisi
+    # car/truck COCO'da TEK sinif -> 7 tipe ayrilamaz; tip icin BoxCars/MIO-TCD kullan
+
+# --- Arac TIPI (BoxCars / MIO-TCD — ince tip verir) --------------------------
+# Bu kaynaklar 'car' yerine sedan/suv/... ayrimi yapar. Kendi indirdigin
+# surumun sinif adlarini 'names' ve 'map'e gore doldur.
+- name: vehicle_types
+  format: yolo
+  images: ../datasets/_raw/vehicle_types/train/images
+  names: [sedan, suv, hatchback, pickup, minibus, panelvan, kamyon]
+  map:
+    sedan: sedan
+    suv: suv
+    hatchback: hatchback
+    pickup: pickup
+    minibus: minibus
+    panelvan: panelvan
+    kamyon: kamyon
+
+# --- Emniyet kemeri (ayri Roboflow seatbelt seti, istege bagli) --------------
+- name: seatbelt
+  format: yolo
+  images: ../datasets/_raw/seatbelt/train/images
+  names: [seatbelt]
+  map:
+    seatbelt: emniyet_kemeri
+
+# --- teknocan (KENDI toplanan + sentetik) ------------------------------------
+- name: teknocan_custom
+  format: yolo
+  images: ../datasets/_raw/teknocan/images
+  names: [teknocan]
+  map:
+    teknocan: teknocan
+
+# --- KOMITE VIDEOLARI (gercek-domain VAL capasi) -----------------------------
+# Kareleri cikarip etiketledikten sonra (X-AnyLabeling -> YOLO). val_only!
+- name: komite_videos
+  format: yolo
+  val_only: true
+  images: ../datasets/_raw/komite/images
+  names: [sedan, suv, hatchback, pickup, minibus, panelvan, kamyon, plaka, teknocan, bilgisayar, telefon, sigara, sise, emniyet_kemeri, kisi]
+  map:
+    sedan: sedan
+    suv: suv
+    plaka: plaka
+    teknocan: teknocan
+    bilgisayar: bilgisayar
+    telefon: telefon
+    sigara: sigara
+    sise: sise
+    emniyet_kemeri: emniyet_kemeri
+    kisi: kisi

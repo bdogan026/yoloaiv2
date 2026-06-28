@@ -1,0 +1,36 @@
+# =============================================================================
+# Rapid Response - YOLO11 custom egitim sinif tanimlari
+# MIMARI: arac TIPI artik YOLO sinifi DEGIL -> YOLO generic 'arac' tespit eder,
+# arac crop'u src/detection/tip_cnn.py ile 7 tipe siniflandirilir (renk gibi).
+# Boylece COCO/DETRAC'in veremedigi sedan/suv/hatchback ayrimi temiz veriyle
+# (VeRi-776 crop'lari, train_tip.py) ogrenilir; gercek-sahne YOLO'su kirlenmez.
+# Sinif ADLARI config.yaml detection.* + schema ile uyumlu (model.names -> ad).
+#
+# Veri kaynaklari (komite ekstra egitim seti VERMIYOR):
+#   - arac:        DETRAC pseudo_label + MIO-TCD (tum araclar) + COCO (lokalizasyon)
+#   - arac tipi:   VeRi-776 crop'lari -> train_tip.py (YOLO'da DEGIL)
+#   - plaka:       Roboflow TR plaka
+#   - bilgisayar:  Roboflow/COCO laptop + copy_paste
+#   - telefon/sigara/sise: Roboflow surucu davranisi + COCO
+#   - emniyet_kemeri: Roboflow seatbelt
+#   - teknocan:    YARISMAYA OZEL -> kendi (sari oyuncak) + copy_paste
+# train/val/test orani onerisi: 0.70 / 0.15 / 0.15 (dengeli, sinif bazli).
+# =============================================================================
+
+path: ../datasets/rapid_response   # veri seti kok dizini (gelistirme makinesi)
+train: images/train
+val: images/val
+test: images/test
+
+# Sinif sayisi ve adlari (id sirasi sabit). Tip artik YOLO'da degil -> 'arac'.
+nc: 9
+names:
+  0: arac
+  1: plaka
+  2: teknocan
+  3: bilgisayar
+  4: telefon
+  5: sigara
+  6: sise
+  7: emniyet_kemeri
+  8: kisi

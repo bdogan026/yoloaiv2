@@ -1,0 +1,30 @@
+# =============================================================================
+# Rapid Response - FTR bagimliliklari
+# Build aninda internet VAR; calisma aninda internet YOK (tum agirliklar gomulu).
+# CUDA 12.1 uyumlu (base image: nvidia/cuda:12.1.0-base-ubuntu22.04).
+# Image <8GB: opencv-python-headless + --no-cache-dir kullanilir.
+# =============================================================================
+
+# PyTorch (CUDA 12.1 / cu121 wheel)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.3.1
+torchvision==0.18.1
+
+# Sayisal / yapilandirma
+numpy==1.26.4
+pyyaml==6.0.2
+
+# Goruntu (headless: GUI bagimliligi yok, kucuk image)
+opencv-python-headless==4.10.0.84
+
+# Tespit + dilimli cikarim (ayni best_model.pt, offline lokal .pt)
+ultralytics==8.3.0
+sahi==0.11.20
+
+# Surucu yuzu (MediaPipe Face Landmarker .task offline)
+mediapipe==0.10.14
+
+# Plaka OCR (offline: model_storage_directory + download_enabled=False)
+easyocr==1.7.2
+fast-plate-ocr==1.1.0
+onnxruntime

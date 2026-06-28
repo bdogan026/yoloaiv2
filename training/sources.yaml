@@ -1,0 +1,120 @@
+# =============================================================================
+# prepare_dataset.py kaynaklari — ORTAK Drive yapisina gore (Colab mount).
+# Colab'da: Drive mount edilir, yollar /content/drive/MyDrive/dataset/... olur.
+# Indirilen gercek setlere gore dolduruldu (2026-06).
+# =============================================================================
+
+# --- Plaka (4857 gorsel) -----------------------------------------------------
+- name: tr_plates
+  format: yolo
+  images: /content/drive/MyDrive/dataset/plaka/tr_plates/train/images
+  names: [license_plate]
+  map: {license_plate: plaka}
+
+# --- Surucu davranisi 1 — abnormal_behaviour (1597) --------------------------
+- name: abnormal_behaviour
+  format: yolo
+  images: /content/drive/MyDrive/dataset/sofor_eylemi/abnormal_behaviour/train/images
+  names: [Cigarette, Drinking, Eating, Phone, Seatbelt]
+  map: {Cigarette: sigara, Drinking: sise, Phone: telefon, Seatbelt: emniyet_kemeri}
+
+# --- Surucu davranisi 2 — driver_behaviors (35796) ---------------------------
+# names sirasi indirilen data.yaml'dan; calistirinca BOS-sinif uyarisi cikarsa teyit et.
+# (GECICI KAPALI - Drive'da 35796 dosya listeleme yavas; abnormal_behaviour ayni siniflari verir)
+#- name: driver_behaviors
+#  format: yolo
+#  images: /content/drive/MyDrive/dataset/sofor_eylemi/driver_behaviors/train/images
+#  names: ['0', Mobile phone, Phone using, Seat-belt, cell phone, cigarette, my-phone, phone, seatbelt, smoke, smoking]
+#  map:
+#    Mobile phone: telefon
+#    Phone using: telefon
+#    cell phone: telefon
+#    my-phone: telefon
+#    phone: telefon
+#    Seat-belt: emniyet_kemeri
+#    seatbelt: emniyet_kemeri
+#    cigarette: sigara
+#    smoke: sigara
+#    smoking: sigara
+
+# --- Arac TIPI — MIO-TCD (indir + YOLO'ya cevir, sonra yorumu kaldir) ---------
+# MIO-TCD gercek isimli tip verir AMA 'car' -> sedan/suv/hatchback AYRIMI YAPMAZ.
+# Asagidaki map pickup/panelvan/minibus/kamyon'u karsilar; sedan/suv/hatchback
+# icin BoxCars veya komite-videosu etiketlemesi GEREKIR (ayri is).
+#- name: mio_tcd_vehicles
+#  format: yolo
+#  images: /content/drive/MyDrive/dataset/arac_tipi/mio_tcd/train/images
+#  names: [articulated_truck, bicycle, bus, car, motorcycle, motorized_vehicle, non-motorized_vehicle, pedestrian, pickup_truck, single_unit_truck, work_van]
+#  map:
+#    pickup_truck: pickup
+#    work_van: panelvan
+#    bus: minibus
+#    single_unit_truck: kamyon
+#    articulated_truck: kamyon
+#    pedestrian: kisi
+#    # car: sedan/suv/hatchback ayrilamaz -> eslenmedi (BoxCars/manuel gerekir)
+
+# --- KOMITE VIDEOLARI — gercek-domain VAL capasi (etiketleyince ekle) --------
+#- name: komite_videos
+#  format: yolo
+#  val_only: true
+#  images: /content/drive/MyDrive/dataset/nesne_yolcu/komite/images
+#  names: [sedan, suv, plaka, teknocan, bilgisayar, telefon, sigara, sise, emniyet_kemeri, kisi]
+#  map: {sedan: sedan, suv: suv, plaka: plaka, teknocan: teknocan, bilgisayar: bilgisayar, telefon: telefon, sigara: sigara, sise: sise, emniyet_kemeri: emniyet_kemeri, kisi: kisi}
+
+# --- Arac TIPI: MIO-TCD (donusturuldu -> /content/mio_yolo) -------------------
+# GENERIC: tum araclar -> 'arac' (tip artik tip_cnn'de, YOLO'da degil).
+# car dahil hepsi 'arac'; pedestrian -> kisi. (bicycle/motorcycle eslenmedi -> at.)
+- name: mio_tcd
+  format: yolo
+  images: /content/mio_yolo/images
+  names: [articulated_truck, bicycle, bus, car, motorcycle, motorized_vehicle, non-motorized_vehicle, pedestrian, pickup_truck, single_unit_truck, work_van]
+  map: {car: arac, pickup_truck: arac, work_van: arac, bus: arac, single_unit_truck: arac, articulated_truck: arac, motorized_vehicle: arac, pedestrian: kisi}
+
+# --- BILGISAYAR + telefon/sise/kisi — COCO val2017 (instances json) ----------
+# COCO'dan: laptop->bilgisayar (asil amac), ayrica cell phone->telefon,
+# bottle/cup->sise, person->kisi BEDAVA gelir. 'car/truck' COCO'da govde-tipine
+# AYRILMAZ -> tip icin kullanilmaz (tip: MIO-TCD + ayri govde-tipi seti).
+# KURULUM: COCO val2017'yi Drive'a indir (asagidaki yollar):
+#   /content/drive/MyDrive/dataset/coco/val2017/                 (~1GB, 5000 gorsel)
+#   /content/drive/MyDrive/dataset/coco/annotations/instances_val2017.json
+#   (kaynak: http://images.cocodataset.org/zips/val2017.zip +
+#            http://images.cocodataset.org/annotations/annotations_trainval2017.zip)
+- name: coco_objects
+  format: coco
+  images: /content/drive/MyDrive/dataset/coco/val2017
+  ann: /content/drive/MyDrive/dataset/coco/annotations/instances_val2017.json
+  map:
+    laptop: bilgisayar
+    cell phone: telefon
+    bottle: sise
+    cup: sise
+    person: kisi
+    car: arac        # generic 'arac' -> COCO araci da kullanilir
+    truck: arac
+    bus: arac
+
+# --- teknocan + komite gercek-domain (tam etiketli: arac/plaka/teknocan/telefon/kisi)
+# KURULUM: Drive'daki zip'i Colab'da ac:
+#   !unzip -q "/content/drive/MyDrive/dataset/nesne_yolcu/teknocan_full.zip" -d /content/
+- name: teknocan_committee
+  format: yolo
+  images: /content/teknocan_full/images
+  names: [arac, plaka, teknocan, bilgisayar, telefon, sigara, sise, emniyet_kemeri, kisi]
+  map: {arac: arac, plaka: plaka, teknocan: teknocan, telefon: telefon, kisi: kisi}
+
+# --- bilgisayar (laptop) — outdoor (Gemini) + komite garaj copy-paste, tam etiketli
+# KURULUM: !unzip -q "/content/drive/MyDrive/dataset/nesne_yolcu/bilgisayar_full.zip" -d /content/
+- name: bilgisayar_committee
+  format: yolo
+  images: /content/bilgisayar_full/images
+  names: [arac, plaka, teknocan, bilgisayar, telefon, sigara, sise, emniyet_kemeri, kisi]
+  map: {arac: arac, plaka: plaka, teknocan: teknocan, bilgisayar: bilgisayar, telefon: telefon, kisi: kisi}
+
+# --- arac belkemigi: DETRAC pseudo-label (tek sinif arac, lokalizasyon) --------
+# KURULUM: !python training/pseudo_label.py --videos /content/detrac --out /content/detrac_arac --fps 2 --augment 1
+- name: detrac_arac
+  format: yolo
+  images: /content/detrac_arac/images/train
+  names: [arac]
+  map: {arac: arac}

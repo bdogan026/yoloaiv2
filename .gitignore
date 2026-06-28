@@ -1,0 +1,46 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ---- Model agirliklari / buyuk ikili dosyalar ----
+# best_model.pt vb. KOMITEYE/IMAJA gomulur ama git'e KONMAZ (boyut).
+# Takim arkadaslarina ayrica paylasin (Drive/LFS). weights/README.md kalir.
+weights/*.pt
+weights/*.onnx
+weights/*.engine
+weights/*.task
+weights/ocr/
+*.pt
+*.onnx
+*.engine
+
+# ---- Docker image export'lari (cok buyuk) ----
+*.tar
+imaj.tar
+
+# ---- Veri / medya / loglar ----
+data/
+# egitim veri seti (VCoR vb.) + symlink'ler — repoya KONMAZ
+datasets/
+*.mp4
+*.avi
+*.mov
+*.log
+runs/
+
+# ---- Node / React Native (mobile/ kendi .gitignore'una da sahip) ----
+node_modules/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+
+# Test ciktilari
+test_out/
